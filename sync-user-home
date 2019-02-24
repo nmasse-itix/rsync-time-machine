@@ -1,0 +1,59 @@
+#!/bin/bash
+
+if [ $# -le 1 ]; then
+  ROOT="$HOME"
+else
+  ROOT="$2"
+fi
+
+. /usr/local/etc/sync.conf
+if [ $? -gt 0 ]; then
+  echo "No configuration could be found. Please write the configuration in /usr/local/etc/sync.conf !"
+  exit 1
+fi
+
+function try_lock() {
+  local file="$ROOT/.rsync-lock"
+  exec 200> $file
+  if [ $? -ne 0 ]; then
+    echo "Cannot create/open lock file: $file"
+    exit 1
+  fi
+  flock -n 200
+}
+
+case $1 in
+sync)
+  if ! try_lock; then
+    echo "Synchronisation is already in progress. Aborting right now !" >&2
+    exit 1
+  fi
+  echo "Starting synchronisation..."
+  rsync -e "ssh -i $HOME/.ssh/id_rsa_backup" --filter "merge $ROOT/.rsync-user-filter" $RSYNC_OPTS $ROOT/ $USER@$REMOTE_HOSTNAME:$ROOT
+  ret=$?
+  if [ $ret -gt 0 ]; then
+    exit $ret
+  else
+    touch "$ROOT/.rsync-timestamp"
+  fi
+;;
+status)
+  if try_lock; then
+    echo "Syncronization service for path $ROOT: STOPPED"
+  else
+    echo "Syncronization service for path $ROOT: RUNNING"
+  fi
+;;
+pending)
+  rsync -e "ssh -i $HOME/.ssh/id_rsa_backup" --filter "merge $ROOT/.rsync-user-filter" $RSYNC_OPTS --dry-run --stats $ROOT/ $USER@$REMOTE_HOSTNAME:$ROOT |sed -r 's/^Total transferred file size: ([0-9,]+) bytes.*/\1/; t clean; d; :clean; s/,//g'
+;;
+last)
+  stat -c %Y $ROOT/.rsync-timestamp
+;;
+*)
+  echo "$0 {sync|status|pending|last}"
+  exit 1
+;;
+esac
+
+exit 0

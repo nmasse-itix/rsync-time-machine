@@ -1,0 +1,106 @@
+#!/usr/bin/perl -w
+
+use Getopt::Long;
+use Pod::Usage;
+use File::Path qw/remove_tree/;
+
+use strict;
+
+sub filter_timestamps {
+  my @timestamps = @_;
+  my %timestamps;
+  my %slices;
+  my @n = (7, 5, 5);
+  @timestamps = sort @timestamps;
+  while (my $thing = pop @timestamps) {
+    my $slice1m = substr $thing, 0, 7;
+    my $slice10d = substr $thing, 0, 9;
+    # Keep the last 7 backups
+    if ($n[0]) {
+      $timestamps{$thing} = 1;
+      $n[0]--;
+      $slices{$slice10d}++;
+      $slices{$slice1m}++;
+      next;
+    } elsif ($n[1]) {
+      # Keep 1 backup for every 10 days (and at most 5 backups)
+      $slices{$slice10d}++;
+      $slices{$slice1m}++;
+      if ($slices{$slice10d} == 1) {
+        $timestamps{$thing} = 1;
+        $n[1]--;
+        next;
+      }
+    } elsif ($n[2]) {
+      # Keep 1 backup for every month (and at most 5 backups)
+      $slices{$slice1m}++;
+      if ($slices{$slice1m} == 1 and not $slices{$slice10d}) {
+        $timestamps{$thing} = 1;
+        $n[2]--;
+        next;
+      }
+    }
+    # else: discard the backup
+    $timestamps{$thing} = 0;
+  }
+  return %timestamps;
+}
+
+my $verbose;
+my $pretend;
+my $help;
+GetOptions("help|?"   => \$help,
+           "pretend"  => \$pretend,
+           "verbose"  => \$verbose)
+  or pod2usage(1);
+pod2usage(0) if $help;
+
+my @timestamps;
+my $tmdir = $ENV{HOME} . "/timemachine";
+opendir DH, $tmdir || die "opendir: $tmdir: $!";
+while (readdir DH) {
+  next if m/^\./;
+  next if ! m/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}.[0-9]{2}.[0-9]{2}$/;
+  push @timestamps, $_;
+}
+closedir DH;
+
+my %timestamps = filter_timestamps(@timestamps);
+if ($verbose) {
+  print "Would remove "
+    . (scalar grep { ! $timestamps{$_} } keys %timestamps )
+    . " items\n";
+  print "Would keep "
+    . (scalar grep { $timestamps{$_} } keys %timestamps )
+    . " items\n";
+}
+
+while (my ($timestamp, $keep) = each(%timestamps)) {
+  next if $keep;
+  if ($pretend) {
+    print "rm -rf '$tmdir/$timestamp'\n";
+  } else {
+    remove_tree("$tmdir/$timestamp", {error => \my $err});
+    if (@$err) {
+      print "remove_tree: $timestamp: cannot remove specified folder !\n"
+        if $verbose;
+    }
+  }
+}
+
+__END__
+
+=head1 NAME
+
+cleanup-timemachine - Cleans the timemachine folder
+
+=head1 SYNOPSIS
+
+C<cleanup-timemachine [options]>
+
+ Options:
+   --help            this help message
+   --verbose         displays additional messages
+   --pretend         just displays what would have been done
+
+=cut
